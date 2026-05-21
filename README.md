@@ -1,0 +1,1 @@
+# Padronizador-de-nome-e-gerador-de-SKU
