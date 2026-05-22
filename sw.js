@@ -9,7 +9,6 @@ const urlsToCache = [
   'https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js'
 ];
 
-// Instalação: adiciona recursos ao cache
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -18,7 +17,6 @@ self.addEventListener('install', event => {
   );
 });
 
-// Ativação: limpa caches antigos
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(cacheNames => {
@@ -30,11 +28,8 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Estratégia: stale-while-revalidate para recursos externos, cache-first para assets locais
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  
-  // Para recursos CDN, usa network first com fallback para cache
   if (url.hostname.includes('cdnjs') || url.hostname.includes('cdn.sheetjs') || url.hostname.includes('tailwindcss')) {
     event.respondWith(
       fetch(event.request)
@@ -47,8 +42,6 @@ self.addEventListener('fetch', event => {
     );
     return;
   }
-  
-  // Para assets locais (HTML, CSS, JS), cache-first
   event.respondWith(
     caches.match(event.request)
       .then(response => response || fetch(event.request))
