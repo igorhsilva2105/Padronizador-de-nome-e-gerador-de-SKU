@@ -16,7 +16,7 @@ let batchProcessingCancel = false;
 let skuBatchProcessingCancel = false;
 const CHUNK_SIZE = 100;
 
-// ==================== FUNÇÕES AUXILIARES ====================
+// ==================== AUXILIARES ====================
 function evaluateCondition(operator, currentValue, expectedValue) {
   if (!currentValue) currentValue = '';
   switch (operator) {
@@ -40,10 +40,7 @@ function isConditionMet(condition, selection) {
     return c.logic === 'AND' ? leftOk && rightOk : leftOk || rightOk;
   }
 }
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
-}
+function escapeHtml(str) { if (!str) return ''; return str.replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m])); }
 function showToast(msg, err = false) {
   const toast = document.getElementById('toast');
   document.getElementById('toast-msg').textContent = msg;
@@ -105,9 +102,41 @@ function loadHistoryFromLocalStorage() {
   const raw = localStorage.getItem('generation_history');
   if (raw) try { generationHistory = JSON.parse(raw); } catch (e) { }
 }
-function cleanInvalidRules() { /* stub - pode ser implementada se necessário */ }
+function cleanInvalidRules() {
+  const validFieldIds = new Set(fields.map(f => f.id));
+  const validFieldValues = new Map();
+  fields.forEach(f => validFieldValues.set(f.id, new Set(f.values)));
+  rules = rules.filter(rule => {
+    let ok = true;
+    if (rule.condition.type === 'simple') {
+      const s = rule.condition.simple;
+      if (!validFieldIds.has(s.sourceFieldId) || !validFieldValues.get(s.sourceFieldId)?.has(s.sourceValue)) ok = false;
+    } else {
+      const c = rule.condition.compound;
+      if (!validFieldIds.has(c.sourceFieldId1) || !validFieldValues.get(c.sourceFieldId1)?.has(c.sourceValue1) ||
+          !validFieldIds.has(c.sourceFieldId2) || !validFieldValues.get(c.sourceFieldId2)?.has(c.sourceValue2)) ok = false;
+    }
+    if (!ok) return false;
+    rule.actions = rule.actions.filter(act => {
+      if (act.type === 'set_separator') return true;
+      if (!validFieldIds.has(act.targetFieldId)) return false;
+      if ((act.type === 'hide_value' || act.type === 'show_value') && act.targetValue && !validFieldValues.get(act.targetFieldId)?.has(act.targetValue)) return false;
+      return true;
+    });
+    return rule.actions.length > 0;
+  });
+  saveToLocalStorage();
+}
 function refreshAll() {
   renderGeneratorFields();
+  if (document.getElementById('settings-fields') && !document.getElementById('settings-fields').classList.contains('hidden')) renderSettingsList();
+  if (document.getElementById('settings-rules') && !document.getElementById('settings-rules').classList.contains('hidden')) renderAutomationsList();
+  if (document.getElementById('settings-skurules') && !document.getElementById('settings-skurules').classList.contains('hidden')) {
+    renderSKURulesSettings();
+    renderSKUConditionalRulesList();
+  }
+  if (document.getElementById('settings-history') && !document.getElementById('settings-history').classList.contains('hidden')) renderHistoryList();
+  if (document.getElementById('settings-logs') && !document.getElementById('settings-logs').classList.contains('hidden')) renderLogs();
   saveToLocalStorage();
 }
 
@@ -266,10 +295,7 @@ function applySuggestions() {
   }
   closeSuggestionsModal();
 }
-function closeSuggestionsModal() {
-  document.getElementById('suggestions-modal')?.classList.add('hidden');
-  pendingSuggestions = [];
-}
+function closeSuggestionsModal() { document.getElementById('suggestions-modal')?.classList.add('hidden'); pendingSuggestions = []; }
 
 // ==================== PADRONIZAÇÃO MANUAL ====================
 function renderGeneratorFields() {
@@ -410,9 +436,7 @@ async function processBatchImport() {
   }
   startBatchProcessing(rawNames);
 }
-function reprocessBatchImport() {
-  if (pendingBatchImportData) startBatchProcessing(pendingBatchImportData.rawNames);
-}
+function reprocessBatchImport() { if (pendingBatchImportData) startBatchProcessing(pendingBatchImportData.rawNames); }
 function startBatchProcessing(rawNames) {
   batchResults = [];
   batchProcessingCancel = false;
@@ -462,15 +486,8 @@ function displayBatchResults() {
   container.innerHTML = html;
   document.getElementById('copy-all-batch-btn')?.classList.remove('hidden');
 }
-function copySpecificResult(idx) {
-  if (batchResults[idx]) { navigator.clipboard?.writeText(batchResults[idx]); showToast("Copiado!"); }
-}
-function copyAllBatchResults() {
-  if (!batchResults.length) return;
-  const all = batchResults.join("\n");
-  navigator.clipboard?.writeText(all);
-  showToast(`${batchResults.length} resultados copiados`);
-}
+function copySpecificResult(idx) { if (batchResults[idx]) { navigator.clipboard?.writeText(batchResults[idx]); showToast("Copiado!"); } }
+function copyAllBatchResults() { if (!batchResults.length) return; const all = batchResults.join("\n"); navigator.clipboard?.writeText(all); showToast(`${batchResults.length} resultados copiados`); }
 function suggestValuesFromRawName(rawName) {
   const normalized = rawName.toLowerCase();
   const newSelection = { ...selectedValues };
@@ -642,15 +659,445 @@ function displaySKUBatchResults() {
   container.innerHTML = html;
   document.getElementById('copy-all-skubatch-btn')?.classList.remove('hidden');
 }
-function copySpecificSKUResult(idx) {
-  if (skuBatchResults[idx]) { navigator.clipboard?.writeText(skuBatchResults[idx].sku); showToast("Copiado!"); }
+function copySpecificSKUResult(idx) { if (skuBatchResults[idx]) { navigator.clipboard?.writeText(skuBatchResults[idx].sku); showToast("Copiado!"); } }
+function copyAllSKUBatchResults() { if (!skuBatchResults.length) return; const all = skuBatchResults.map(i => i.sku).join("\n"); navigator.clipboard?.writeText(all); showToast(`${skuBatchResults.length} SKUs copiados`); }
+
+// ==================== GERENCIAMENTO DE CAMPOS ====================
+function renderSettingsList() {
+  const container = document.getElementById('settings-container');
+  if (!container) return;
+  container.innerHTML = '';
+  fields.forEach((field, idx) => {
+    const card = document.createElement('div');
+    card.className = "mb-6 mx-4 bg-white rounded-xl shadow-sm overflow-hidden";
+    const header = document.createElement('div');
+    header.className = "flex items-center justify-between p-4 bg-gray-50 border-b border-gray-100";
+    const leftDiv = document.createElement('div');
+    leftDiv.className = "flex items-center gap-2";
+    const upFieldBtn = mkMoveBtn('↑', () => moveFieldUp(idx));
+    const downFieldBtn = mkMoveBtn('↓', () => moveFieldDown(idx));
+    leftDiv.appendChild(upFieldBtn);
+    leftDiv.appendChild(downFieldBtn);
+    const titleContainer = document.createElement('div');
+    titleContainer.className = "flex items-center gap-2 cursor-pointer";
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = field.label;
+    titleSpan.className = "font-semibold text-gray-800 text-base field-title-edit px-2 py-1 rounded-md";
+    const editIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    editIcon.setAttribute("class", "w-4 h-4 text-gray-400");
+    editIcon.setAttribute("fill", "none");
+    editIcon.setAttribute("stroke", "currentColor");
+    editIcon.setAttribute("viewBox", "0 0 24 24");
+    editIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path>`;
+    titleContainer.appendChild(titleSpan);
+    titleContainer.appendChild(editIcon);
+    leftDiv.appendChild(titleContainer);
+    const removeBtn = document.createElement('button');
+    removeBtn.innerHTML = `<svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>`;
+    removeBtn.className = "p-2 text-red-500 hover:bg-red-50 rounded-full";
+    removeBtn.onclick = () => removeField(field.id);
+    header.appendChild(leftDiv);
+    header.appendChild(removeBtn);
+    titleContainer.addEventListener("click", (e) => { e.stopPropagation(); enableTitleEdit(field, titleContainer); });
+    card.appendChild(header);
+    const valuesDiv = document.createElement('div');
+    valuesDiv.className = "divide-y divide-gray-100";
+    field.values.forEach((val, vIdx) => {
+      const row = document.createElement('div');
+      row.className = "ios-list-item !pl-4 !pr-2";
+      const actions = document.createElement('div');
+      actions.className = "value-actions flex gap-1";
+      const upValBtn = mkMoveBtn('↑', () => moveValueUp(field.id, vIdx));
+      const downValBtn = mkMoveBtn('↓', () => moveValueDown(field.id, vIdx));
+      const removeValBtn = document.createElement('button');
+      removeValBtn.innerHTML = `<svg class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
+      removeValBtn.className = "p-1 hover:bg-red-50 rounded-full";
+      removeValBtn.onclick = () => removeOptionFromField(field.id, vIdx);
+      actions.appendChild(upValBtn);
+      actions.appendChild(downValBtn);
+      actions.appendChild(removeValBtn);
+      const span = document.createElement('span');
+      span.textContent = val;
+      span.className = "text-gray-800 text-[16px] flex-1";
+      const wrapper = document.createElement('div');
+      wrapper.className = "flex items-center justify-between w-full";
+      wrapper.appendChild(span);
+      wrapper.appendChild(actions);
+      row.appendChild(wrapper);
+      valuesDiv.appendChild(row);
+    });
+    const addRow = document.createElement('div');
+    addRow.className = "ios-list-item bg-gray-50 !pl-4";
+    addRow.innerHTML = `<div class="flex items-center w-full gap-2"><button class="add-value-btn p-1 text-green-500"><svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd"></path></svg></button><input type="text" id="add-value-input-${field.id}" placeholder="Adicionar novo valor..." class="w-full bg-transparent outline-none text-[17px] py-1" onkeypress="handleEnterValue(event, '${field.id}')"></div>`;
+    addRow.querySelector('.add-value-btn').onclick = () => addOptionToField(field.id);
+    valuesDiv.appendChild(addRow);
+    card.appendChild(valuesDiv);
+    container.appendChild(card);
+  });
+  if (!fields.length) container.innerHTML = '<div class="text-center py-12 text-gray-400">Nenhum campo cadastrado. Clique em "+ Novo Campo".</div>';
 }
-function copyAllSKUBatchResults() {
-  if (!skuBatchResults.length) return;
-  const all = skuBatchResults.map(i => i.sku).join("\n");
-  navigator.clipboard?.writeText(all);
-  showToast(`${skuBatchResults.length} SKUs copiados`);
+function mkMoveBtn(icon, onclick) {
+  const btn = document.createElement('button');
+  btn.innerHTML = `<svg class="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${icon === '↑' ? 'M5 15l7-7 7 7' : 'M19 9l-7 7-7-7'}"></path></svg>`;
+  btn.className = "move-btn p-1 hover:bg-gray-200 rounded-full transition-colors";
+  btn.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return btn;
 }
+function enableTitleEdit(field, container) {
+  const input = document.createElement('input');
+  input.value = field.label;
+  input.className = "edit-input font-semibold text-gray-800 text-base";
+  input.style.width = `${Math.max(field.label.length+2, 8)}ch`;
+  container.innerHTML = '';
+  container.appendChild(input);
+  input.focus();
+  input.select();
+  const finish = () => {
+    const newLabel = input.value.trim();
+    if (newLabel && newLabel !== field.label) {
+      field.label = newLabel;
+      refreshAll();
+      addLog('field_rename', `Campo "${field.label}"`);
+      showToast("Renomeado");
+    } else refreshAll();
+  };
+  input.addEventListener("blur", finish);
+  input.addEventListener("keypress", (e) => { if (e.key === "Enter") finish(); });
+}
+function moveFieldUp(index) {
+  if (index <= 0) return;
+  [fields[index - 1], fields[index]] = [fields[index], fields[index - 1]];
+  if (skuConfig && skuConfig.fieldOrder) {
+    const id1 = fields[index - 1].id, id2 = fields[index].id;
+    const pos1 = skuConfig.fieldOrder.indexOf(id1), pos2 = skuConfig.fieldOrder.indexOf(id2);
+    if (pos1 !== -1 && pos2 !== -1) [skuConfig.fieldOrder[pos1], skuConfig.fieldOrder[pos2]] = [skuConfig.fieldOrder[pos2], skuConfig.fieldOrder[pos1]];
+  }
+  refreshAll();
+  renderSettingsList();
+  addLog('field_move', `Campo "${fields[index - 1].label}" movido para cima`);
+  showToast("Campo movido para cima");
+}
+function moveFieldDown(index) {
+  if (index >= fields.length - 1) return;
+  [fields[index + 1], fields[index]] = [fields[index], fields[index + 1]];
+  if (skuConfig && skuConfig.fieldOrder) {
+    const id1 = fields[index + 1].id, id2 = fields[index].id;
+    const pos1 = skuConfig.fieldOrder.indexOf(id1), pos2 = skuConfig.fieldOrder.indexOf(id2);
+    if (pos1 !== -1 && pos2 !== -1) [skuConfig.fieldOrder[pos1], skuConfig.fieldOrder[pos2]] = [skuConfig.fieldOrder[pos2], skuConfig.fieldOrder[pos1]];
+  }
+  refreshAll();
+  renderSettingsList();
+  addLog('field_move', `Campo "${fields[index + 1].label}" movido para baixo`);
+  showToast("Campo movido para baixo");
+}
+function moveValueUp(fieldId, valueIndex) {
+  const field = fields.find(f => f.id === fieldId);
+  if (!field || valueIndex <= 0) return;
+  [field.values[valueIndex - 1], field.values[valueIndex]] = [field.values[valueIndex], field.values[valueIndex - 1]];
+  refreshAll();
+  renderSettingsList();
+  addLog('value_move', `Valor "${field.values[valueIndex - 1]}" movido para cima em ${field.label}`);
+  showToast("Valor movido para cima");
+}
+function moveValueDown(fieldId, valueIndex) {
+  const field = fields.find(f => f.id === fieldId);
+  if (!field || valueIndex >= field.values.length - 1) return;
+  [field.values[valueIndex + 1], field.values[valueIndex]] = [field.values[valueIndex], field.values[valueIndex + 1]];
+  refreshAll();
+  renderSettingsList();
+  addLog('value_move', `Valor "${field.values[valueIndex + 1]}" movido para baixo em ${field.label}`);
+  showToast("Valor movido para baixo");
+}
+function addNewField() {
+  const newId = `field_${nextFieldId++}`;
+  const newLabel = `Novo Campo ${fields.length + 1}`;
+  fields.push({ id: newId, label: newLabel, values: ["Exemplo"] });
+  selectedValues[newId] = "Exemplo";
+  if (skuConfig && skuConfig.fieldOrder && !skuConfig.fieldOrder.includes(newId)) skuConfig.fieldOrder.push(newId);
+  refreshAll();
+  renderSettingsList();
+  addLog('field_add', `Campo "${newLabel}" criado`);
+  showToast("Campo adicionado");
+}
+function removeField(fieldId) {
+  if (!confirm("Remover campo?")) return;
+  const idx = fields.findIndex(f => f.id === fieldId);
+  const label = fields[idx].label;
+  delete selectedValues[fieldId];
+  fields.splice(idx, 1);
+  rules = rules.filter(r => !((r.condition.type === 'simple' && r.condition.simple.sourceFieldId === fieldId) || (r.condition.type === 'compound' && (r.condition.compound.sourceFieldId1 === fieldId || r.condition.compound.sourceFieldId2 === fieldId)) || r.actions.some(a => a.targetFieldId === fieldId)));
+  skuConfig.fieldOrder = skuConfig.fieldOrder.filter(id => id !== fieldId);
+  skuConditionalRules = skuConditionalRules.filter(r => r.condition.fieldId !== fieldId);
+  cleanInvalidRules();
+  refreshAll();
+  renderSettingsList();
+  addLog('field_remove', label);
+  showToast("Campo removido");
+}
+function addOptionToField(fieldId) {
+  const input = document.getElementById(`add-value-input-${fieldId}`);
+  if (!input) return;
+  const val = input.value.trim();
+  if (!val) { showToast("Digite um valor", true); return; }
+  const field = fields.find(f => f.id === fieldId);
+  if (field && !field.values.includes(val)) {
+    field.values.push(val);
+    if (!selectedValues[fieldId]) selectedValues[fieldId] = val;
+    refreshAll();
+    renderSettingsList();
+    addLog('value_add', `${val} em ${field.label}`);
+    showToast("Valor adicionado");
+    input.value = '';
+  } else showToast("Valor já existe", true);
+}
+function removeOptionFromField(fieldId, valIdx) {
+  const field = fields.find(f => f.id === fieldId);
+  if (!field) return;
+  const removed = field.values[valIdx];
+  if (selectedValues[fieldId] === removed) selectedValues[fieldId] = field.values.length > 1 ? field.values.find(v => v !== removed) : null;
+  field.values.splice(valIdx, 1);
+  cleanInvalidRules();
+  refreshAll();
+  renderSettingsList();
+  addLog('value_remove', removed);
+  showToast("Removido");
+}
+function handleEnterValue(e, fieldId) { if (e.key === 'Enter') { e.preventDefault(); addOptionToField(fieldId); } }
+
+// ==================== REGRAS E/OU ====================
+function renderAutomationsList() {
+  const container = document.getElementById('automations-list');
+  if (!container) return;
+  if (!rules.length) { container.innerHTML = '<div class="text-center text-gray-400 py-8">Nenhuma regra criada.</div>'; return; }
+  let html = '';
+  rules.forEach((rule, idx) => {
+    let conditionDesc = '';
+    if (rule.condition.type === 'simple') {
+      const s = rule.condition.simple;
+      const srcField = fields.find(f => f.id === s.sourceFieldId);
+      const opSymbol = { eq: '=', neq: '≠', contains: '⊃' }[s.operator || 'eq'];
+      conditionDesc = `Se "${srcField?.label}" ${opSymbol} "${s.sourceValue}"`;
+    } else {
+      const c = rule.condition.compound;
+      const f1 = fields.find(f => f.id === c.sourceFieldId1);
+      const f2 = fields.find(f => f.id === c.sourceFieldId2);
+      const op1 = { eq: '=', neq: '≠', contains: '⊃' }[c.operator1 || 'eq'];
+      const op2 = { eq: '=', neq: '≠', contains: '⊃' }[c.operator2 || 'eq'];
+      const logic = c.logic === 'AND' ? 'E' : 'OU';
+      conditionDesc = `Se (${f1?.label} ${op1} "${c.sourceValue1}" ${logic} ${f2?.label} ${op2} "${c.sourceValue2}")`;
+    }
+    let actionsHtml = '<div class="mt-2 text-sm"><ul class="list-disc list-inside text-xs">';
+    rule.actions.forEach(act => {
+      if (act.type === 'hide_field') { const targetField = fields.find(f => f.id === act.targetFieldId); actionsHtml += `<li>Ocultar campo "${targetField?.label}"</li>`; }
+      else if (act.type === 'show_field') { const targetField = fields.find(f => f.id === act.targetFieldId); actionsHtml += `<li>Mostrar campo "${targetField?.label}"</li>`; }
+      else if (act.type === 'hide_value') { const targetField = fields.find(f => f.id === act.targetFieldId); actionsHtml += `<li>Ocultar valor "${act.targetValue}" de "${targetField?.label}"</li>`; }
+      else if (act.type === 'show_value') { const targetField = fields.find(f => f.id === act.targetFieldId); actionsHtml += `<li>Mostrar valor "${act.targetValue}" de "${targetField?.label}"</li>`; }
+      else if (act.type === 'set_separator') { actionsHtml += `<li>Separador: "${act.separator}"</li>`; }
+    });
+    actionsHtml += '</ul></div>';
+    html += `<div class="bg-white rounded-xl shadow-sm p-3 rule-card flex justify-between items-center"><div><div class="font-medium">${conditionDesc}</div>${actionsHtml}</div><div class="flex gap-1"><button onclick="moveRuleUp(${idx})" class="text-blue-500 p-1">↑</button><button onclick="moveRuleDown(${idx})" class="text-blue-500 p-1">↓</button><button onclick="removeRule('${rule.id}')" class="text-red-500 p-1">🗑️</button></div></div>`;
+  });
+  container.innerHTML = html;
+}
+function moveRuleUp(idx) { if (idx <= 0) return; [rules[idx-1], rules[idx]] = [rules[idx], rules[idx-1]]; renderAutomationsList(); saveToLocalStorage(); addLog('rule_reorder', 'Regra movida para cima'); showToast("Ordem alterada"); }
+function moveRuleDown(idx) { if (idx >= rules.length-1) return; [rules[idx+1], rules[idx]] = [rules[idx], rules[idx+1]]; renderAutomationsList(); saveToLocalStorage(); addLog('rule_reorder', 'Regra movida para baixo'); showToast("Ordem alterada"); }
+let actionRows = [];
+function showAdvancedRuleForm() {
+  actionRows = []; document.getElementById('actions-container').innerHTML = ''; addActionRow();
+  const simpleField = document.getElementById('rule-source-field-simple');
+  const simpleVal = document.getElementById('rule-source-value-simple');
+  const field1 = document.getElementById('rule-source-field1');
+  const val1 = document.getElementById('rule-source-value1');
+  const field2 = document.getElementById('rule-source-field2');
+  const val2 = document.getElementById('rule-source-value2');
+  [simpleField, field1, field2].forEach(sel => { sel.innerHTML = ''; fields.forEach(f => sel.appendChild(new Option(f.label, f.id))); });
+  const updateSimple = () => { const f = fields.find(f => f.id === simpleField.value); simpleVal.innerHTML = ''; if (f) f.values.forEach(v => simpleVal.appendChild(new Option(v, v))); };
+  simpleField.onchange = updateSimple; updateSimple();
+  const update = (fs, vs) => { const f = fields.find(f => f.id === fs.value); vs.innerHTML = ''; if (f) f.values.forEach(v => vs.appendChild(new Option(v, v))); };
+  field1.onchange = () => update(field1, val1); field2.onchange = () => update(field2, val2);
+  update(field1, val1); update(field2, val2);
+  document.getElementById('rule-modal').classList.remove('hidden');
+}
+function addActionRow() {
+  const container = document.getElementById('actions-container');
+  const rowDiv = document.createElement('div');
+  rowDiv.className = "action-row bg-gray-50 p-3 rounded-lg border mb-2";
+  rowDiv.innerHTML = `<select class="action-type mb-2 w-full border rounded p-1"><option value="hide_field">Ocultar campo</option><option value="show_field">Mostrar campo</option><option value="hide_value">Ocultar valor</option><option value="show_value">Mostrar valor</option><option value="set_separator">Definir separador</option></select><select class="action-field mb-2 w-full border rounded p-1"></select><select class="action-value w-full border rounded p-1" style="display:none"></select><input type="text" class="action-separator w-full border rounded p-1" placeholder="Separador" style="display:none"><button type="button" class="text-red-500 text-xs mt-1" onclick="this.closest('.action-row').remove()">Remover ação</button>`;
+  const typeSel = rowDiv.querySelector('.action-type');
+  const fieldSel = rowDiv.querySelector('.action-field');
+  const valueSel = rowDiv.querySelector('.action-value');
+  const sepInp = rowDiv.querySelector('.action-separator');
+  fields.forEach(f => fieldSel.appendChild(new Option(f.label, f.id)));
+  const update = () => {
+    const isSep = typeSel.value === 'set_separator';
+    fieldSel.style.display = isSep ? 'none' : 'block';
+    valueSel.style.display = (!isSep && (typeSel.value === 'hide_value' || typeSel.value === 'show_value')) ? 'block' : 'none';
+    sepInp.style.display = isSep ? 'block' : 'none';
+    if (!isSep) {
+      const fid = fieldSel.value;
+      const f = fields.find(f => f.id === fid);
+      valueSel.innerHTML = '<option value="">-- valor --</option>';
+      if (f) f.values.forEach(v => valueSel.appendChild(new Option(v, v)));
+    }
+  };
+  typeSel.onchange = update; fieldSel.onchange = update; update();
+  container.appendChild(rowDiv);
+  actionRows.push(rowDiv);
+}
+function saveAdvancedRule() {
+  const condType = document.getElementById('condition-type').value;
+  let condition;
+  if (condType === 'simple') {
+    const sourceFieldId = document.getElementById('rule-source-field-simple').value;
+    const operator = document.getElementById('simple-operator').value;
+    const sourceValue = document.getElementById('rule-source-value-simple').value;
+    if (!sourceFieldId || !sourceValue) { showToast("Preencha condição", true); return; }
+    condition = { type: 'simple', simple: { sourceFieldId, operator, sourceValue } };
+  } else {
+    const f1 = document.getElementById('rule-source-field1').value;
+    const op1 = document.getElementById('operator1').value;
+    const v1 = document.getElementById('rule-source-value1').value;
+    const logic = document.getElementById('compound-operator').value;
+    const f2 = document.getElementById('rule-source-field2').value;
+    const op2 = document.getElementById('operator2').value;
+    const v2 = document.getElementById('rule-source-value2').value;
+    if (!f1 || !v1 || !f2 || !v2) { showToast("Preencha ambos os lados", true); return; }
+    condition = { type: 'compound', compound: { sourceFieldId1: f1, operator1: op1, sourceValue1: v1, logic, sourceFieldId2: f2, operator2: op2, sourceValue2: v2 } };
+  }
+  const actions = [];
+  document.querySelectorAll('.action-row').forEach(row => {
+    const type = row.querySelector('.action-type').value;
+    if (type === 'set_separator') {
+      const sep = row.querySelector('.action-separator').value.trim();
+      if (!sep) { showToast("Separador obrigatório", true); return; }
+      actions.push({ type, separator: sep });
+    } else {
+      const targetFieldId = row.querySelector('.action-field').value;
+      if (!targetFieldId) return;
+      if (type === 'hide_value' || type === 'show_value') {
+        const targetValue = row.querySelector('.action-value').value;
+        if (!targetValue) { showToast("Selecione um valor", true); return; }
+        actions.push({ type, targetFieldId, targetValue });
+      } else { actions.push({ type, targetFieldId }); }
+    }
+  });
+  if (!actions.length) { showToast("Adicione ações", true); return; }
+  const newRule = { id: `rule_${nextRuleId++}`, condition, actions };
+  rules.push(newRule);
+  cleanInvalidRules();
+  refreshAll();
+  renderAutomationsList();
+  closeRuleModal();
+  addLog('rule_add', `Regra ${condType}`);
+  showToast("Regra salva");
+}
+function removeRule(ruleId) { rules = rules.filter(r => r.id !== ruleId); refreshAll(); renderAutomationsList(); addLog('rule_remove', 'Regra removida'); showToast("Regra removida"); }
+function closeRuleModal() { document.getElementById('rule-modal').classList.add('hidden'); actionRows = []; }
+
+// ==================== REGRAS DO SKU ====================
+function renderSKURulesSettings() {
+  const container = document.getElementById('sku-fields-order');
+  if (!container) return;
+  skuConfig.fieldOrder = skuConfig.fieldOrder.filter(id => fields.some(f => f.id === id));
+  for (let field of fields) if (!skuConfig.fieldOrder.includes(field.id)) skuConfig.fieldOrder.push(field.id);
+  let html = `<div class="border rounded-lg overflow-hidden">`;
+  skuConfig.fieldOrder.forEach((fieldId, idx) => {
+    const field = fields.find(f => f.id === fieldId);
+    if (!field) return;
+    html += `<div class="flex justify-between items-center p-2 border-b"><div class="flex items-center gap-2"><span class="cursor-move">☰</span><span>${escapeHtml(field.label)}</span></div><div class="flex gap-1"><button onclick="moveSKUFieldUp(${idx})" class="text-blue-500 px-2">↑</button><button onclick="moveSKUFieldDown(${idx})" class="text-blue-500 px-2">↓</button><label><input type="checkbox" class="sku-field-enable" data-id="${fieldId}" ${skuConfig.fieldOrder.includes(fieldId) ? 'checked' : ''}> Usar</label></div></div>`;
+  });
+  html += `</div><p class="text-xs text-gray-400 mt-2">Os campos marcados serão usados na ordem mostrada. Desmarque para excluir.</p>`;
+  container.innerHTML = html;
+  document.querySelectorAll('.sku-field-enable').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const fid = cb.dataset.id;
+      if (cb.checked) { if (!skuConfig.fieldOrder.includes(fid)) skuConfig.fieldOrder.push(fid); }
+      else { skuConfig.fieldOrder = skuConfig.fieldOrder.filter(id => id !== fid); }
+      renderSKURulesSettings();
+      saveToLocalStorage();
+    });
+  });
+  document.getElementById('sku-part-separator').value = skuConfig.partSeparator;
+  document.getElementById('sku-add-suffix').checked = skuConfig.addSuffix;
+  document.getElementById('sku-suffix-length-config').value = skuConfig.suffixLength;
+  document.getElementById('sku-uppercase-config').checked = skuConfig.uppercase;
+  const suffixDiv = document.getElementById('sku-suffix-options');
+  const toggleSuffix = () => { suffixDiv.style.display = document.getElementById('sku-add-suffix').checked ? 'block' : 'none'; };
+  document.getElementById('sku-add-suffix').addEventListener('change', toggleSuffix);
+  toggleSuffix();
+}
+function moveSKUFieldUp(idx) { if (idx <= 0) return; [skuConfig.fieldOrder[idx-1], skuConfig.fieldOrder[idx]] = [skuConfig.fieldOrder[idx], skuConfig.fieldOrder[idx-1]]; renderSKURulesSettings(); saveToLocalStorage(); addLog('sku_base_reorder', 'Ordem dos campos alterada'); showToast("Ordem atualizada"); }
+function moveSKUFieldDown(idx) { if (idx >= skuConfig.fieldOrder.length-1) return; [skuConfig.fieldOrder[idx+1], skuConfig.fieldOrder[idx]] = [skuConfig.fieldOrder[idx], skuConfig.fieldOrder[idx+1]]; renderSKURulesSettings(); saveToLocalStorage(); addLog('sku_base_reorder', 'Ordem dos campos alterada'); showToast("Ordem atualizada"); }
+function saveSKUBaseRules() {
+  skuConfig.partSeparator = document.getElementById('sku-part-separator').value || '_';
+  skuConfig.addSuffix = document.getElementById('sku-add-suffix').checked;
+  skuConfig.suffixLength = parseInt(document.getElementById('sku-suffix-length-config').value) || 3;
+  skuConfig.uppercase = document.getElementById('sku-uppercase-config').checked;
+  saveToLocalStorage();
+  addLog('sku_base_save', 'Configurações base do SKU salvas');
+  showToast("Configurações base salvas");
+}
+function renderSKUConditionalRulesList() {
+  const container = document.getElementById('sku-conditional-rules-list');
+  if (!container) return;
+  if (!skuConditionalRules.length) { container.innerHTML = '<div class="text-center text-gray-400 py-4 text-sm">Nenhuma regra condicional criada.</div>'; return; }
+  let html = '';
+  skuConditionalRules.forEach((rule, idx) => {
+    const field = fields.find(f => f.id === rule.condition.fieldId);
+    const opSymbol = { eq: '=', neq: '≠', contains: '⊃' }[rule.condition.operator];
+    const actionType = { set_separator: 'Separador', set_prefix: 'Prefixo', set_suffix: 'Sufixo' }[rule.action.type];
+    html += `<div class="bg-purple-50 border-l-4 border-purple-500 rounded-lg p-3 flex justify-between items-center">
+                <div class="text-sm"><span class="font-medium">Se ${field?.label} ${opSymbol} "${rule.condition.value}"</span> → <span class="text-purple-700">${actionType}: "${rule.action.value}"</span></div>
+                <div class="flex gap-1"><button onclick="moveSKUCondRuleUp(${idx})" class="text-blue-500 p-1">↑</button><button onclick="moveSKUCondRuleDown(${idx})" class="text-blue-500 p-1">↓</button><button onclick="removeSKUConditionalRule(${idx})" class="text-red-500 p-1">🗑️</button></div>
+             </div>`;
+  });
+  container.innerHTML = html;
+}
+function moveSKUCondRuleUp(idx) { if (idx <= 0) return; [skuConditionalRules[idx-1], skuConditionalRules[idx]] = [skuConditionalRules[idx], skuConditionalRules[idx-1]]; renderSKUConditionalRulesList(); saveToLocalStorage(); addLog('sku_cond_move', 'Regra SKU movida'); showToast("Ordem alterada"); }
+function moveSKUCondRuleDown(idx) { if (idx >= skuConditionalRules.length-1) return; [skuConditionalRules[idx+1], skuConditionalRules[idx]] = [skuConditionalRules[idx], skuConditionalRules[idx+1]]; renderSKUConditionalRulesList(); saveToLocalStorage(); addLog('sku_cond_move', 'Regra SKU movida'); showToast("Ordem alterada"); }
+function showSKUConditionalRuleForm() {
+  const fieldSel = document.getElementById('sku-cond-field');
+  fieldSel.innerHTML = ''; fields.forEach(f => fieldSel.appendChild(new Option(f.label, f.id)));
+  const valSel = document.getElementById('sku-cond-value');
+  const updateValues = () => { const fid = fieldSel.value; const f = fields.find(f => f.id === fid); valSel.innerHTML = ''; if (f) f.values.forEach(v => valSel.appendChild(new Option(v, v))); };
+  fieldSel.onchange = updateValues; updateValues();
+  document.getElementById('sku-cond-action-value').value = '';
+  document.getElementById('sku-cond-modal').classList.remove('hidden');
+}
+function saveSKUConditionalRule() {
+  const fieldId = document.getElementById('sku-cond-field').value;
+  const operator = document.getElementById('sku-cond-operator').value;
+  const value = document.getElementById('sku-cond-value').value;
+  const actionType = document.getElementById('sku-cond-action-type').value;
+  const actionVal = document.getElementById('sku-cond-action-value').value.trim();
+  if (!fieldId || !value || !actionVal) { showToast("Preencha todos os campos", true); return; }
+  skuConditionalRules.push({ condition: { fieldId, operator, value }, action: { type: actionType, value: actionVal } });
+  renderSKUConditionalRulesList();
+  saveToLocalStorage();
+  addLog('sku_cond_add', `Regra: ${actionType} = ${actionVal}`);
+  showToast("Regra adicionada");
+  closeSKUCondModal();
+}
+function removeSKUConditionalRule(idx) { skuConditionalRules.splice(idx,1); renderSKUConditionalRulesList(); saveToLocalStorage(); addLog('sku_cond_remove', 'Regra removida'); showToast("Regra removida"); }
+function closeSKUCondModal() { document.getElementById('sku-cond-modal').classList.add('hidden'); }
+
+// ==================== IMPORTAÇÃO/EXPORTAÇÃO ====================
+function exportFieldsOnly() { if (!fields.length) { showToast("Nenhum campo", true); return; } const blob = new Blob([JSON.stringify(fields, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `campos_${Date.now()}.json`; a.click(); addLog('export_fields', 'Campos exportados'); showToast("Exportado"); }
+function importFieldsOnly(input) { const file = input.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = e => { try { const imported = JSON.parse(e.target.result); if (!Array.isArray(imported)) throw new Error(); fields = imported; const newSel = {}; fields.forEach(f => { if (selectedValues[f.id] && f.values.includes(selectedValues[f.id])) newSel[f.id] = selectedValues[f.id]; else if (f.values.length) newSel[f.id] = f.values[0]; }); selectedValues = newSel; let maxId = 0; fields.forEach(f => { const num = parseInt(f.id.split('_')[1]); if (!isNaN(num) && num > maxId) maxId = num; }); nextFieldId = maxId + 1; skuConfig.fieldOrder = skuConfig.fieldOrder.filter(id => fields.some(f => f.id === id)); fields.forEach(f => { if (!skuConfig.fieldOrder.includes(f.id)) skuConfig.fieldOrder.push(f.id); }); cleanInvalidRules(); refreshAll(); renderSettingsList(); addLog('import_fields', `${imported.length} campos`); showToast("Importado"); } catch(err) { showToast("Arquivo inválido", true); } input.value = ''; }; reader.readAsText(file); }
+function exportRules() { if (!rules.length) { showToast("Nenhuma regra", true); return; } const blob = new Blob([JSON.stringify(rules, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `regras_${Date.now()}.json`; a.click(); addLog('export_rules', 'Regras exportadas'); showToast("Exportado"); }
+function importRules(input) { const file = input.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = e => { try { const imported = JSON.parse(e.target.result); if (!Array.isArray(imported)) throw new Error(); rules = imported; let maxId = 0; rules.forEach(r => { const num = parseInt(r.id.split('_')[1]); if (!isNaN(num) && num > maxId) maxId = num; }); nextRuleId = maxId + 1; cleanInvalidRules(); refreshAll(); renderAutomationsList(); addLog('import_rules', `${imported.length} regras`); showToast("Importado"); } catch(err) { showToast("Arquivo inválido", true); } input.value = ''; }; reader.readAsText(file); }
+function exportConfig() { const cfg = { fields, selectedValues, rules, nextFieldId, nextRuleId, skuConfig, skuConditionalRules }; const blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `config_completa_${Date.now()}.json`; a.click(); addLog('config_export', 'Configuração exportada'); showToast("Exportado"); }
+function importConfig(input) { const file = input.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = e => { try { const cfg = JSON.parse(e.target.result); fields = cfg.fields || []; selectedValues = cfg.selectedValues || {}; rules = cfg.rules || []; nextFieldId = cfg.nextFieldId || 1; nextRuleId = cfg.nextRuleId || 1; if (cfg.skuConfig) skuConfig = cfg.skuConfig; else skuConfig = { fieldOrder: fields.map(f => f.id), partSeparator: '_', addSuffix: true, suffixLength: 3, uppercase: true }; skuConditionalRules = cfg.skuConditionalRules || []; skuConfig.fieldOrder = skuConfig.fieldOrder.filter(id => fields.some(f => f.id === id)); fields.forEach(f => { if (!skuConfig.fieldOrder.includes(f.id)) skuConfig.fieldOrder.push(f.id); }); cleanInvalidRules(); refreshAll(); renderSettingsList(); renderAutomationsList(); renderSKURulesSettings(); renderSKUConditionalRulesList(); addLog('config_import', 'Configuração importada'); showToast("Importado"); } catch(err) { showToast("Arquivo inválido", true); } input.value = ''; }; reader.readAsText(file); }
+function confirmResetToDefault() { if (confirm("Resetar configuração?")) { fields = []; selectedValues = {}; rules = []; skuConditionalRules = []; nextFieldId = 1; nextRuleId = 1; initDefaultData(); cleanInvalidRules(); refreshAll(); renderSettingsList(); renderAutomationsList(); renderSKURulesSettings(); renderSKUConditionalRulesList(); addLog('reset_default', 'Reset para padrão'); showToast("Configuração restaurada"); } }
+
+// ==================== LOGS E HISTÓRICO ====================
+function renderLogs() { const container = document.getElementById('logs-container'); if (!container) return; if (!systemLogs.length) { container.innerHTML = '<div class="text-center text-gray-400 py-8">Nenhum log</div>'; return; } let html = '<div class="divide-y">'; systemLogs.slice(0, 200).forEach(log => { const date = new Date(log.timestamp); html += `<div class="p-3 text-sm"><div class="font-medium">${log.action}</div><div class="text-xs text-gray-400">${date.toLocaleString('pt-BR')}</div><div class="text-xs text-gray-500 break-all">${escapeHtml(log.details)}</div></div>`; }); html += '</div>'; container.innerHTML = html; }
+function exportLogs() { if (!systemLogs.length) { showToast("Nenhum log", true); return; } const blob = new Blob([JSON.stringify(systemLogs, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `logs_${Date.now()}.json`; a.click(); addLog('logs_export', 'Logs exportados'); showToast("Exportado"); }
+function clearLogs() { if (confirm("Limpar logs?")) { systemLogs = []; localStorage.setItem('product_padronizer_logs', '[]'); renderLogs(); addLog('logs_clear', 'Logs limpos'); showToast("Logs limpos"); } }
+function renderHistoryList() { const container = document.getElementById('history-list'); if (!container) return; if (!generationHistory.length) { container.innerHTML = '<div class="text-center text-gray-400 py-8">Nenhum item gerado.</div>'; return; } let html = '<div class="space-y-2">'; generationHistory.forEach(item => { const date = new Date(item.timestamp); const formatted = date.toLocaleString('pt-BR'); const icon = item.type === 'label' ? '🏷️' : '🔢'; html += `<div class="bg-gray-50 rounded-xl p-3 border"><div class="flex justify-between items-start"><div><div class="text-xs text-gray-400">${icon} ${item.type === 'label' ? 'Etiqueta' : 'SKU'} • ${formatted}</div><div class="text-sm font-medium break-all">${escapeHtml(item.content)}</div></div><div><button onclick="copyHistoryItem('${item.id}')" class="text-blue-500 p-1">📋</button><button onclick="reloadHistoryItem('${item.id}')" class="text-green-600 p-1">↺</button></div></div></div>`; }); html += '</div>'; container.innerHTML = html; }
+function copyHistoryItem(id) { const item = generationHistory.find(i => i.id === id); if (item) { navigator.clipboard?.writeText(item.content); showToast("Copiado!"); } }
+function reloadHistoryItem(id) { const item = generationHistory.find(i => i.id === id); if (item) { navigator.clipboard?.writeText(item.content); showToast(`Recarregado: "${item.content}"`); } }
+function clearHistory() { if (confirm("Limpar histórico?")) { generationHistory = []; localStorage.setItem('generation_history', '[]'); renderHistoryList(); addLog('history_clear', 'Histórico limpo'); showToast("Histórico limpo"); } }
 
 // ==================== NAVEGAÇÃO E UI ====================
 function switchTab(tabId) {
@@ -670,6 +1117,7 @@ function generatorGoBack() {
   document.getElementById('generator-skubatch').classList.add('hidden');
   document.getElementById('back-generator-btn').classList.add('hidden');
   document.getElementById('nav-title').innerHTML = 'Gerador';
+  batchResults = []; displayBatchResults(); skuBatchResults = []; displaySKUBatchResults();
 }
 function settingsGoBack() {
   document.getElementById('settings-main').classList.remove('hidden');
@@ -690,8 +1138,9 @@ function showGeneratorSubview(subviewId) {
   const titles = { manual: 'Padronizar Manual', batch: 'Importar Lista', sku: 'Gerar SKU', skubatch: 'Gerar SKU em Lote' };
   document.getElementById('nav-title').innerHTML = titles[subviewId];
   if (subviewId === 'manual') { renderGeneratorFields(); updatePreviewText(); }
-  if (subviewId === 'batch') displayBatchResults();
-  if (subviewId === 'skubatch') displaySKUBatchResults();
+  if (subviewId === 'batch') { batchResults = []; displayBatchResults(); }
+  if (subviewId === 'sku') { document.getElementById('sku-product-name').value = ''; document.getElementById('sku-result-text').innerHTML = 'Aguardando entrada...'; }
+  if (subviewId === 'skubatch') { skuBatchResults = []; displaySKUBatchResults(); document.getElementById('skubatch-import-file').value = ''; }
 }
 function showSettingsSubview(subviewId) {
   document.getElementById('settings-main').classList.add('hidden');
@@ -705,40 +1154,42 @@ function showSettingsSubview(subviewId) {
   if (subviewId === 'history') renderHistoryList();
   if (subviewId === 'logs') renderLogs();
 }
-// Placeholders para funções de configuração (podem ser expandidas)
-function renderSettingsList() { const c = document.getElementById('settings-container'); if (c) c.innerHTML = '<div class="text-center py-8 text-gray-400">Gerencie campos aqui (UI completa disponível)</div>'; }
-function renderAutomationsList() { const c = document.getElementById('automations-list'); if (c) c.innerHTML = '<div class="text-center text-gray-400 py-4">Regras configuráveis</div>'; }
-function renderSKURulesSettings() {}
-function renderSKUConditionalRulesList() {}
-function renderHistoryList() { const c = document.getElementById('history-list'); if (c) c.innerHTML = '<div class="text-center text-gray-400">Histórico vazio</div>'; }
-function renderLogs() { const c = document.getElementById('logs-container'); if (c) c.innerHTML = '<div class="text-center text-gray-400">Sem logs</div>'; }
-function addNewField() { showToast("Função disponível na versão completa", true); }
-function exportRules() { showToast("Função disponível na versão completa", true); }
-function importRules() { showToast("Função disponível na versão completa", true); }
-function showAdvancedRuleForm() { showToast("Função disponível na versão completa", true); }
-function saveAdvancedRule() { showToast("Função disponível na versão completa", true); }
-function closeRuleModal() { document.getElementById('rule-modal').classList.add('hidden'); }
-function showSKUConditionalRuleForm() { showToast("Função disponível na versão completa", true); }
-function saveSKUConditionalRule() { showToast("Função disponível na versão completa", true); }
-function closeSKUCondModal() { document.getElementById('sku-cond-modal').classList.add('hidden'); }
-function exportFieldsOnly() { showToast("Função disponível na versão completa", true); }
-function importFieldsOnly() { showToast("Função disponível na versão completa", true); }
-function exportConfig() { showToast("Função disponível na versão completa", true); }
-function importConfig() { showToast("Função disponível na versão completa", true); }
-function confirmResetToDefault() { if (confirm("Resetar configuração?")) location.reload(); }
-function clearHistory() { generationHistory = []; localStorage.setItem('generation_history', '[]'); renderHistoryList(); showToast("Histórico limpo"); }
-function clearLogs() { systemLogs = []; localStorage.setItem('product_padronizer_logs', '[]'); renderLogs(); showToast("Logs limpos"); }
-function exportLogs() { if (!systemLogs.length) { showToast("Sem logs", true); return; } const blob = new Blob([JSON.stringify(systemLogs, null, 2)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `logs_${Date.now()}.json`; a.click(); }
-function addActionRow() { /* placeholder */ }
+
+// ==================== PWA INSTALL MODAL ====================
+function showInstallPWAModal() {
+  const modal = document.getElementById('install-pwa-modal');
+  if (modal) modal.classList.remove('hidden');
+}
+function closeInstallPWAModal() {
+  const modal = document.getElementById('install-pwa-modal');
+  if (modal) modal.classList.add('hidden');
+}
+function triggerInstallPrompt() {
+  if (deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(() => {
+      deferredPrompt = null;
+      closeInstallPWAModal();
+      document.getElementById('pwa-banner')?.classList.add('hidden');
+    });
+  } else {
+    showToast("Seu navegador já instalou o app ou não suporta instalação direta. Tente pelo menu do navegador.", true);
+  }
+}
 
 // ==================== INICIALIZAÇÃO E SERVICE WORKER ====================
+let deferredPrompt;
 function init() {
   loadLogsFromLocalStorage();
   loadFromLocalStorage();
   loadHistoryFromLocalStorage();
   initDefaultData();
+  cleanInvalidRules();
   refreshAll();
-  // Registro do Service Worker
+  renderSKUConditionalRulesList();
+  document.getElementById('batch-import-file').value = '';
+  document.getElementById('skubatch-import-file').value = '';
+  // Service Worker
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js')
@@ -746,26 +1197,16 @@ function init() {
         .catch(err => console.log('Falha no SW', err));
     });
   }
-  // PWA Install prompt
-  let deferredPrompt;
+  // PWA install prompt
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
     const banner = document.getElementById('pwa-banner');
     if (banner) banner.classList.remove('hidden');
   });
-  const installBtn = document.getElementById('install-pwa-btn');
-  if (installBtn) {
-    installBtn.addEventListener('click', () => {
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        deferredPrompt.userChoice.then(() => {
-          deferredPrompt = null;
-          const banner = document.getElementById('pwa-banner');
-          if (banner) banner.classList.add('hidden');
-        });
-      }
-    });
-  }
+  const installBannerBtn = document.getElementById('install-pwa-btn');
+  if (installBannerBtn) installBannerBtn.addEventListener('click', () => { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(() => { deferredPrompt = null; document.getElementById('pwa-banner')?.classList.add('hidden'); }); } else showToast("Instalação não disponível agora", true); });
+  const modalInstallBtn = document.getElementById('modal-install-btn');
+  if (modalInstallBtn) modalInstallBtn.addEventListener('click', triggerInstallPrompt);
 }
 init();
